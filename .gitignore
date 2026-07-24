@@ -7,6 +7,7 @@ venv/
 # uploads and generated files
 uploads/
 outputs/
+tests/samples/_tmp_*.docx
 
 # Node / Vite
 frontend/node_modules/
