@@ -1102,43 +1102,43 @@ export default async function handler(req, res) {
       return;
     }
 
-    if (method === "POST" && (path === "/auth/login" || path === "/session/login")) return handleAuthLogin(req, res);
-    if (method === "POST" && (path === "/auth/register" || path === "/session/register")) return handleAuthRegister(req, res);
-    if (method === "POST" && (path === "/auth/forgot-password" || path === "/session/forgot-password")) return handleAuthForgot(req, res);
-    if (method === "GET" && path === "/session/me") return handleSessionMe(res, auth);
-    if (method === "POST" && path === "/session/logout") return handleSessionLogout(req, res);
+    if (method === "POST" && (path === "/auth/login" || path === "/session/login")) return await handleAuthLogin(req, res);
+    if (method === "POST" && (path === "/auth/register" || path === "/session/register")) return await handleAuthRegister(req, res);
+    if (method === "POST" && (path === "/auth/forgot-password" || path === "/session/forgot-password")) return await handleAuthForgot(req, res);
+    if (method === "GET" && path === "/session/me") return await handleSessionMe(res, auth);
+    if (method === "POST" && path === "/session/logout") return await handleSessionLogout(req, res);
 
-    if (method === "POST" && path === "/user/upload") return handleUserUpload(req, res, auth);
-    if (method === "POST" && path === "/user/detect") return handleUserDetect(req, res, auth);
-    if (method === "POST" && path === "/user/auto-format") return handleUserAutoFormat(req, res, auth);
-    if (method === "GET" && path === "/user/history") return handleUserHistory(req, res, auth);
-    if (method === "GET" && path === "/user/stats") return handleUserStats(req, res, auth);
-    if (method === "GET" && path === "/user/templates") return handleUserTemplates(req, res, auth);
-    if (method === "GET" && path === "/user/report") return handleUserReport(req, res, auth);
+    if (method === "POST" && path === "/user/upload") return await handleUserUpload(req, res, auth);
+    if (method === "POST" && path === "/user/detect") return await handleUserDetect(req, res, auth);
+    if (method === "POST" && path === "/user/auto-format") return await handleUserAutoFormat(req, res, auth);
+    if (method === "GET" && path === "/user/history") return await handleUserHistory(req, res, auth);
+    if (method === "GET" && path === "/user/stats") return await handleUserStats(req, res, auth);
+    if (method === "GET" && path === "/user/templates") return await handleUserTemplates(req, res, auth);
+    if (method === "GET" && path === "/user/report") return await handleUserReport(req, res, auth);
 
     const fileDownloadMatch = path.match(/^\/files\/(\d+)\/download$/);
-    if (method === "GET" && fileDownloadMatch) return handleFileDownload(req, res, auth, Number(fileDownloadMatch[1]));
+    if (method === "GET" && fileDownloadMatch) return await handleFileDownload(req, res, auth, Number(fileDownloadMatch[1]));
 
     const fileDeleteMatch = path.match(/^\/files\/(\d+)$/);
-    if (method === "DELETE" && fileDeleteMatch) return handleFileDelete(req, res, auth, Number(fileDeleteMatch[1]));
+    if (method === "DELETE" && fileDeleteMatch) return await handleFileDelete(req, res, auth, Number(fileDeleteMatch[1]));
 
     const reportExcelMatch = path.match(/^\/reports\/(\d+)\/excel$/);
-    if (method === "GET" && reportExcelMatch) return handleReportExcel(req, res, auth, Number(reportExcelMatch[1]));
+    if (method === "GET" && reportExcelMatch) return await handleReportExcel(req, res, auth, Number(reportExcelMatch[1]));
 
-    if (path === "/admin/users") return handleAdminUsers(req, res, auth);
+    if (path === "/admin/users") return await handleAdminUsers(req, res, auth);
 
     const adminUserMatch = path.match(/^\/admin\/users\/(\d+)$/);
-    if (adminUserMatch) return handleAdminUserById(req, res, auth, Number(adminUserMatch[1]));
+    if (adminUserMatch) return await handleAdminUserById(req, res, auth, Number(adminUserMatch[1]));
 
-    if (path === "/admin/templates") return handleAdminTemplates(req, res, auth);
+    if (path === "/admin/templates") return await handleAdminTemplates(req, res, auth);
 
     const adminTemplateRuleMatch = path.match(/^\/admin\/templates\/(\d+)\/rules$/);
-    if (adminTemplateRuleMatch) return handleAdminTemplateRules(req, res, auth, Number(adminTemplateRuleMatch[1]));
+    if (adminTemplateRuleMatch) return await handleAdminTemplateRules(req, res, auth, Number(adminTemplateRuleMatch[1]));
 
     const adminTemplateMatch = path.match(/^\/admin\/templates\/(\d+)$/);
-    if (adminTemplateMatch) return handleAdminTemplateById(req, res, auth, Number(adminTemplateMatch[1]));
+    if (adminTemplateMatch) return await handleAdminTemplateById(req, res, auth, Number(adminTemplateMatch[1]));
 
-    if (method === "GET" && path === "/admin/stats") return handleAdminStats(req, res, auth);
+    if (method === "GET" && path === "/admin/stats") return await handleAdminStats(req, res, auth);
 
     throw new ApiError("API route not found", 404);
   } catch (error) {

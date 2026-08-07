@@ -19,3 +19,5 @@ frontend/.env.local
 # system files
 .DS_Store
 Thumbs.db
+
+.vercel
