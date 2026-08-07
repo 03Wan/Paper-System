@@ -42,7 +42,6 @@
             <el-button type="primary" :loading="loading" style="width: 100%" @click="onSubmit">登录</el-button>
             <div class="actions">
               <el-button link type="primary" @click="onRegisterTip">立即注册</el-button>
-              <el-button link @click="forgotVisible = true">忘记密码</el-button>
             </div>
           </el-form>
 
@@ -51,26 +50,6 @@
       </section>
     </div>
 
-    <el-dialog v-model="forgotVisible" title="忘记密码" width="460px">
-      <el-form :model="forgotForm" label-width="100px">
-        <el-form-item label="用户名">
-          <el-input v-model="forgotForm.username" />
-        </el-form-item>
-        <el-form-item label="邮箱">
-          <el-input v-model="forgotForm.email" placeholder="邮箱或手机号至少填一个" />
-        </el-form-item>
-        <el-form-item label="手机号">
-          <el-input v-model="forgotForm.phone" placeholder="邮箱或手机号至少填一个" />
-        </el-form-item>
-        <el-form-item label="新密码">
-          <el-input v-model="forgotForm.new_password" type="password" show-password placeholder="至少 6 位" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="forgotVisible = false">取消</el-button>
-        <el-button type="primary" :loading="forgotLoading" @click="onForgotPassword">重置密码</el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
@@ -78,7 +57,7 @@
 import { onMounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
-import { forgotPasswordApi, loginApi } from "../api/auth";
+import { loginApi } from "../api/auth";
 import { useAuthStore } from "../stores/auth";
 import { useTheme } from "../composables/useTheme";
 
@@ -86,9 +65,6 @@ const router = useRouter();
 const auth = useAuthStore();
 const loading = ref(false);
 const form = reactive({ username: "", password: "" });
-const forgotVisible = ref(false);
-const forgotLoading = ref(false);
-const forgotForm = reactive({ username: "", email: "", phone: "", new_password: "" });
 const { theme, initTheme, toggleTheme } = useTheme();
 
 onMounted(() => {
@@ -112,7 +88,7 @@ async function onSubmit() {
   loading.value = true;
   try {
     const res = await loginApi(form);
-    auth.setAuth(res.data.access_token, res.data.user);
+    auth.setAuth(res.data.user);
     ElMessage.success("登录成功");
     router.push(res.data.user.role === "ADMIN" ? "/admin/home" : "/user/home");
   } catch (error) {
@@ -123,31 +99,7 @@ async function onSubmit() {
 }
 
 function onRegisterTip() {
-  ElMessage.info("注册功能暂未开启，敬请期待中");
-}
-
-async function onForgotPassword() {
-  if (!forgotForm.username || !forgotForm.new_password) {
-    ElMessage.warning("请填写用户名和新密码");
-    return;
-  }
-  if (!forgotForm.email && !forgotForm.phone) {
-    ElMessage.warning("邮箱或手机号至少填写一个");
-    return;
-  }
-  forgotLoading.value = true;
-  try {
-    await forgotPasswordApi(forgotForm);
-    ElMessage.success("密码重置成功，请重新登录");
-    form.username = forgotForm.username;
-    form.password = "";
-    forgotVisible.value = false;
-    Object.assign(forgotForm, { username: "", email: "", phone: "", new_password: "" });
-  } catch (error) {
-    ElMessage.error(parseErrorMessage(error, "重置失败，请稍后重试"));
-  } finally {
-    forgotLoading.value = false;
-  }
+  ElMessage.info("注册与密码重置请联系系统管理员");
 }
 </script>
 

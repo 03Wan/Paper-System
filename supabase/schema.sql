@@ -179,7 +179,8 @@ begin
   new.updated_at = now();
   return new;
 end;
-$$ language plpgsql;
+$$ language plpgsql
+set search_path = '';
 
 drop trigger if exists trg_sys_user_updated_at on public.sys_user;
 create trigger trg_sys_user_updated_at before update on public.sys_user for each row execute function public.update_updated_at_column();
@@ -196,7 +197,8 @@ create trigger trg_detection_task_updated_at before update on public.detection_t
 drop trigger if exists trg_detection_result_updated_at on public.detection_result;
 create trigger trg_detection_result_updated_at before update on public.detection_result for each row execute function public.update_updated_at_column();
 
--- Basic RLS (demo): authenticated users can read; admins can write.
+-- The browser never accesses these tables directly. RLS stays enabled with no
+-- anon/authenticated policies; the trusted API uses the server-only service role.
 alter table public.sys_user enable row level security;
 alter table public.paper enable row level security;
 alter table public.file_record enable row level security;
@@ -207,42 +209,36 @@ alter table public.detection_result enable row level security;
 alter table public.system_log enable row level security;
 
 drop policy if exists "read all users" on public.sys_user;
-create policy "read all users" on public.sys_user for select using (true);
 drop policy if exists "write users for all" on public.sys_user;
-create policy "write users for all" on public.sys_user for all using (true) with check (true);
 
 drop policy if exists "read all paper" on public.paper;
-create policy "read all paper" on public.paper for select using (true);
 drop policy if exists "write paper for all" on public.paper;
-create policy "write paper for all" on public.paper for all using (true) with check (true);
 
 drop policy if exists "read all file_record" on public.file_record;
-create policy "read all file_record" on public.file_record for select using (true);
 drop policy if exists "write file_record for all" on public.file_record;
-create policy "write file_record for all" on public.file_record for all using (true) with check (true);
 
 drop policy if exists "read all format_template" on public.format_template;
-create policy "read all format_template" on public.format_template for select using (true);
 drop policy if exists "write format_template for all" on public.format_template;
-create policy "write format_template for all" on public.format_template for all using (true) with check (true);
 
 drop policy if exists "read all format_rule" on public.format_rule;
-create policy "read all format_rule" on public.format_rule for select using (true);
 drop policy if exists "write format_rule for all" on public.format_rule;
-create policy "write format_rule for all" on public.format_rule for all using (true) with check (true);
 
 drop policy if exists "read all detection_task" on public.detection_task;
-create policy "read all detection_task" on public.detection_task for select using (true);
 drop policy if exists "write detection_task for all" on public.detection_task;
-create policy "write detection_task for all" on public.detection_task for all using (true) with check (true);
 
 drop policy if exists "read all detection_result" on public.detection_result;
-create policy "read all detection_result" on public.detection_result for select using (true);
 drop policy if exists "write detection_result for all" on public.detection_result;
-create policy "write detection_result for all" on public.detection_result for all using (true) with check (true);
 
 drop policy if exists "read all system_log" on public.system_log;
-create policy "read all system_log" on public.system_log for select using (true);
 drop policy if exists "write system_log for all" on public.system_log;
-create policy "write system_log for all" on public.system_log for all using (true) with check (true);
 
+revoke all on table
+  public.sys_user,
+  public.paper,
+  public.file_record,
+  public.format_template,
+  public.format_rule,
+  public.detection_task,
+  public.detection_result,
+  public.system_log
+from anon, authenticated;

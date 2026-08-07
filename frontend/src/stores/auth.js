@@ -1,26 +1,50 @@
 import { defineStore } from "pinia";
+import { getSessionApi, logoutApi } from "../api/auth";
 
 export const useAuthStore = defineStore("auth", {
   state: () => ({
-    token: localStorage.getItem("access_token") || "",
-    user: JSON.parse(localStorage.getItem("user_info") || "null")
+    user: null,
+    initialized: false,
+    initializePromise: null
   }),
   getters: {
-    isLogin: (state) => Boolean(state.token),
+    isLogin: (state) => Boolean(state.user?.id),
     role: (state) => state.user?.role || "USER"
   },
   actions: {
-    setAuth(token, user) {
-      this.token = token;
+    setAuth(user) {
       this.user = user;
-      localStorage.setItem("access_token", token);
-      localStorage.setItem("user_info", JSON.stringify(user));
+      this.initialized = true;
     },
-    logout() {
-      this.token = "";
+    async initialize() {
+      if (this.initialized) return this.user;
+      if (this.initializePromise) return this.initializePromise;
+      this.initializePromise = getSessionApi()
+        .then((response) => {
+          this.user = response?.data?.user || null;
+          return this.user;
+        })
+        .catch(() => {
+          this.user = null;
+          return null;
+        })
+        .finally(() => {
+          this.initialized = true;
+          this.initializePromise = null;
+        });
+      return this.initializePromise;
+    },
+    async logout() {
+      try {
+        await logoutApi();
+      } finally {
+        this.user = null;
+        this.initialized = true;
+      }
+    },
+    clearSession() {
       this.user = null;
-      localStorage.removeItem("access_token");
-      localStorage.removeItem("user_info");
+      this.initialized = true;
     }
   }
 });

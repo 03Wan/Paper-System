@@ -58,8 +58,8 @@
         <el-form-item label="用户名">
           <el-input v-model="form.username" :disabled="Boolean(form.id)" />
         </el-form-item>
-        <el-form-item label="密码" v-if="!form.id">
-          <el-input v-model="form.password" type="password" show-password />
+        <el-form-item :label="form.id ? '重置密码' : '密码'">
+          <el-input v-model="form.password" type="password" show-password :placeholder="form.id ? '留空则不修改，至少 8 位' : '至少 8 位'" />
         </el-form-item>
         <el-form-item label="姓名">
           <el-input v-model="form.real_name" />

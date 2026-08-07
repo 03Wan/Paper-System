@@ -87,6 +87,21 @@ function json(status: number, body: Record<string, unknown>) {
   });
 }
 
+function hasServiceRoleJwt(req: Request): boolean {
+  const authorization = req.headers.get("authorization") || "";
+  const token = authorization.replace(/^Bearer\s+/i, "").trim();
+  const parts = token.split(".");
+  if (parts.length !== 3) return false;
+  try {
+    const payloadPart = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = payloadPart.padEnd(Math.ceil(payloadPart.length / 4) * 4, "=");
+    const payload = JSON.parse(atob(padded)) as { role?: string };
+    return payload.role === "service_role";
+  } catch {
+    return false;
+  }
+}
+
 function localNameOf(el: Element): string {
   const raw = (el.localName || el.tagName || (el as unknown as { nodeName?: string }).nodeName || "").toLowerCase();
   if (raw.includes(":")) return raw.split(":").pop() || raw;
@@ -1468,6 +1483,9 @@ function runAllChecks(docInfo: DocInfo, rules: RuleRow[]): Issue[] {
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return json(405, { code: 405, message: "Method not allowed" });
+  // The Supabase gateway verifies the JWT before this handler runs. Restrict
+  // the function further so a valid anon/user JWT cannot invoke privileged work.
+  if (!hasServiceRoleJwt(req)) return json(403, { code: 403, message: "Service role required" });
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";

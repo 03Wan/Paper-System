@@ -1,7 +1,8 @@
 ﻿import axios from "axios";
 
 const apiClient = axios.create({
-  timeout: 60000
+  timeout: 60000,
+  withCredentials: true
 });
 
 function normalizeApiPath(path) {
@@ -10,29 +11,6 @@ function normalizeApiPath(path) {
   if (!p.startsWith("/api/")) p = `/api${p}`;
   return p;
 }
-
-apiClient.interceptors.request.use((config) => {
-  const token = localStorage.getItem("access_token") || "";
-  const userRaw = localStorage.getItem("user_info");
-
-  if (token) {
-    config.headers = config.headers || {};
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-
-  if (userRaw) {
-    try {
-      const user = JSON.parse(userRaw);
-      config.headers = config.headers || {};
-      if (user?.id != null) config.headers["x-user-id"] = String(user.id);
-      if (user?.role) config.headers["x-user-role"] = String(user.role);
-    } catch {
-      // ignore invalid local cache
-    }
-  }
-
-  return config;
-});
 
 apiClient.interceptors.response.use(
   (resp) => {

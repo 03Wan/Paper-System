@@ -1,6 +1,21 @@
 ﻿import { createClient } from "@supabase/supabase-js";
 import { randomUUID } from "node:crypto";
 
+import {
+  SESSION_COOKIE,
+  assertSameOrigin,
+  clearSessionCookie,
+  createSessionToken,
+  hashPassword,
+  isHashedPassword,
+  isSecureRequest,
+  loginAttemptKey,
+  parseCookies,
+  sessionCookie,
+  verifyPassword,
+  verifySessionToken
+} from "../server/security.js";
+
 export const config = {
   api: {
     bodyParser: {
@@ -9,9 +24,10 @@ export const config = {
   }
 };
 
-const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
-const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || "";
-const STORAGE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET || process.env.VITE_SUPABASE_STORAGE_BUCKET || "files";
+const supabaseUrl = process.env.SUPABASE_URL || "";
+const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+const authTokenSecret = process.env.AUTH_TOKEN_SECRET || "";
+const STORAGE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET || "files";
 
 const supabase = createClient(supabaseUrl, supabaseServiceRoleKey, {
   auth: { persistSession: false }
@@ -53,16 +69,9 @@ async function writeSystemLog(payload = {}) {
 }
 
 function getAuth(req) {
-  const token = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "").trim();
-  const headerUserId = String(req.headers["x-user-id"] || "").trim();
-  const role = String(req.headers["x-user-role"] || "USER").toUpperCase();
-
-  let userId = headerUserId ? Number(headerUserId) : null;
-  if (!userId && token.startsWith("sb-local-")) {
-    const m = token.match(/^sb-local-(\d+)-/);
-    if (m) userId = Number(m[1]);
-  }
-  return { token, userId: Number.isFinite(userId) ? userId : null, role, user: null };
+  const token = parseCookies(req.headers.cookie || "")[SESSION_COOKIE] || "";
+  const session = verifySessionToken(token, authTokenSecret);
+  return { token, userId: session?.userId || null, role: "USER", user: null, session };
 }
 
 async function hydrateAuth(auth) {
@@ -88,9 +97,77 @@ function requireAdmin(auth) {
 }
 
 function ensureSupabaseEnv() {
-  if (!supabaseUrl || !supabaseServiceRoleKey) {
-    throw new ApiError("Missing Supabase env vars: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY", 500);
+  if (!supabaseUrl || !supabaseServiceRoleKey || Buffer.byteLength(authTokenSecret, "utf8") < 32) {
+    throw new ApiError("Missing or invalid server environment variables", 500);
   }
+}
+
+function enforceSameOrigin(req) {
+  try {
+    assertSameOrigin(req);
+  } catch {
+    throw new ApiError("Cross-origin request rejected", 403);
+  }
+}
+
+function clientIp(req) {
+  return String(req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "unknown").split(",")[0].trim();
+}
+
+async function assertLoginAllowed(keyHash) {
+  const { data, error } = await supabase
+    .from("auth_login_attempt")
+    .select("blocked_until")
+    .eq("key_hash", keyHash)
+    .maybeSingle();
+  if (error) throw new ApiError(error.message, 500);
+  if (data?.blocked_until && new Date(data.blocked_until).getTime() > Date.now()) {
+    throw new ApiError("Too many login attempts. Please try again later.", 429);
+  }
+}
+
+async function recordLoginFailure(keyHash) {
+  const { data, error } = await supabase
+    .from("auth_login_attempt")
+    .select("failure_count, window_started_at")
+    .eq("key_hash", keyHash)
+    .maybeSingle();
+  if (error) throw new ApiError(error.message, 500);
+
+  const now = new Date();
+  const windowStart = data?.window_started_at ? new Date(data.window_started_at) : null;
+  const inWindow = windowStart && now.getTime() - windowStart.getTime() < 15 * 60 * 1000;
+  const failureCount = inWindow ? Number(data?.failure_count || 0) + 1 : 1;
+  const blockedUntil = failureCount >= 5 ? new Date(now.getTime() + 15 * 60 * 1000).toISOString() : null;
+  const { error: upsertError } = await supabase.from("auth_login_attempt").upsert({
+    key_hash: keyHash,
+    failure_count: failureCount,
+    window_started_at: inWindow ? windowStart.toISOString() : now.toISOString(),
+    blocked_until: blockedUntil,
+    last_attempt_at: now.toISOString()
+  }, { onConflict: "key_hash" });
+  if (upsertError) throw new ApiError(upsertError.message, 500);
+}
+
+async function clearLoginFailures(keyHash) {
+  const { error } = await supabase.from("auth_login_attempt").delete().eq("key_hash", keyHash);
+  if (error) throw new ApiError(error.message, 500);
+}
+
+async function assertPaperAccess(auth, paperId) {
+  const userId = requireLogin(auth);
+  const { data, error } = await supabase
+    .from("paper")
+    .select("id, author_id")
+    .eq("id", paperId)
+    .is("deleted_at", null)
+    .maybeSingle();
+  if (error) throw new ApiError(error.message, 500);
+  if (!data) throw new ApiError("Document not found", 404);
+  if (String(auth.user?.role || "").toUpperCase() !== "ADMIN" && Number(data.author_id) !== userId) {
+    throw new ApiError("Document not found", 404);
+  }
+  return data;
 }
 
 function parseJsonBody(req) {
@@ -191,6 +268,9 @@ async function handleAuthLogin(req, res) {
   const password = String(payload?.password || "");
   if (!username || !password) throw new ApiError("Username and password are required", 400);
 
+  const attemptKey = loginAttemptKey(username, clientIp(req), authTokenSecret);
+  await assertLoginAllowed(attemptKey);
+
   const { data, error } = await supabase
     .from("sys_user")
     .select("id, username, password_hash, role, real_name, email, phone, status")
@@ -198,13 +278,18 @@ async function handleAuthLogin(req, res) {
     .is("deleted_at", null)
     .maybeSingle();
   if (error) throw new ApiError(error.message, 500);
-  if (!data) throw new ApiError("Account does not exist", 404);
-  if (Number(data.status) !== 1) throw new ApiError("Account is disabled", 403);
-  if (String(data.password_hash || "") !== password) throw new ApiError("Wrong password", 401);
+  const passwordValid = data ? await verifyPassword(password, data.password_hash) : false;
+  if (!data || !passwordValid || Number(data.status) !== 1) {
+    await recordLoginFailure(attemptKey);
+    throw new ApiError("Invalid username or password", 401);
+  }
+
+  await clearLoginFailures(attemptKey);
 
   const loginAt = new Date().toISOString();
+  const passwordUpgrade = isHashedPassword(data.password_hash) ? {} : { password_hash: await hashPassword(password) };
   const [userUpdateResult, logInsertResult] = await Promise.all([
-    supabase.from("sys_user").update({ last_login_at: loginAt, updated_at: loginAt }).eq("id", data.id),
+    supabase.from("sys_user").update({ ...passwordUpgrade, last_login_at: loginAt, updated_at: loginAt }).eq("id", data.id),
     supabase.from("system_log").insert({
       user_id: data.id,
       log_type: "LOGIN",
@@ -220,9 +305,9 @@ async function handleAuthLogin(req, res) {
   if (userUpdateResult.error) throw new ApiError(userUpdateResult.error.message, 500);
   if (logInsertResult.error) throw new ApiError(logInsertResult.error.message, 500);
 
-  const accessToken = `sb-local-${data.id}-${Date.now()}`;
+  const sessionToken = createSessionToken(data.id, authTokenSecret);
+  res.setHeader("Set-Cookie", sessionCookie(sessionToken, isSecureRequest(req)));
   ok(res, {
-    access_token: accessToken,
     user: {
       id: data.id,
       username: data.username,
@@ -236,75 +321,20 @@ async function handleAuthLogin(req, res) {
 }
 
 async function handleAuthRegister(req, res) {
-  const payload = parseJsonBody(req);
-  const username = String(payload?.username || "").trim();
-  const password = String(payload?.password || "").trim();
-  if (!username || !password) throw new ApiError("Username and password are required", 400);
-
-  const insertPayload = {
-    username,
-    password_hash: password,
-    role: "USER",
-    real_name: payload?.real_name || null,
-    email: payload?.email || null,
-    phone: payload?.phone || null,
-    status: 1
-  };
-
-  const { error } = await supabase.from("sys_user").insert(insertPayload);
-  if (error) {
-    if (/duplicate key|unique/i.test(error.message || "")) throw new ApiError("Username/email/phone already exists", 409);
-    throw new ApiError(error.message, 500);
-  }
-  await writeSystemLog({
-    log_type: "CREATE",
-    module: "auth",
-    action: "register",
-    target_type: "user",
-    target_id: username,
-    message: "用户注册成功",
-    detail_json: { username }
-  });
-  ok(res, {});
+  throw new ApiError("Self-service registration is disabled", 403);
 }
 
 async function handleAuthForgot(req, res) {
-  const payload = parseJsonBody(req);
-  const username = String(payload?.username || "").trim();
-  const email = String(payload?.email || "").trim();
-  const phone = String(payload?.phone || "").trim();
-  const newPassword = String(payload?.new_password || "");
-  if (!username || !newPassword) throw new ApiError("Username and new password are required", 400);
-  if (!email && !phone) throw new ApiError("Email or phone is required", 400);
+  throw new ApiError("Self-service password recovery is disabled", 403);
+}
 
-  let query = supabase
-    .from("sys_user")
-    .select("id, email, phone")
-    .eq("username", username)
-    .is("deleted_at", null)
-    .limit(1);
-  if (email) query = query.eq("email", email);
-  if (phone) query = query.eq("phone", phone);
+function handleSessionMe(res, auth) {
+  requireLogin(auth);
+  ok(res, { user: auth.user });
+}
 
-  const { data, error } = await query.maybeSingle();
-  if (error) throw new ApiError(error.message, 500);
-  if (!data) throw new ApiError("Username or contact does not match", 404);
-
-  const { error: updateError } = await supabase
-    .from("sys_user")
-    .update({ password_hash: newPassword, updated_at: new Date().toISOString() })
-    .eq("id", data.id);
-  if (updateError) throw new ApiError(updateError.message, 500);
-  await writeSystemLog({
-    user_id: data.id,
-    log_type: "UPDATE",
-    module: "auth",
-    action: "forgot-password",
-    target_type: "user",
-    target_id: String(data.id),
-    message: "用户重置密码成功",
-    detail_json: { username }
-  });
+function handleSessionLogout(req, res) {
+  res.setHeader("Set-Cookie", clearSessionCookie(isSecureRequest(req)));
   ok(res, {});
 }
 
@@ -388,6 +418,7 @@ async function handleUserDetect(req, res, auth) {
   const payload = parseJsonBody(req);
   const paperId = Number(payload?.paper_id);
   if (!paperId) throw new ApiError("paper_id is required", 400);
+  await assertPaperAccess(auth, paperId);
 
   const sourceFile = await getLatestSourceFile(paperId);
   const templateId = await resolveTemplateId(payload?.template_id);
@@ -455,6 +486,7 @@ async function handleUserAutoFormat(req, res, auth) {
   const payload = parseJsonBody(req);
   const paperId = Number(payload?.paper_id);
   if (!paperId) throw new ApiError("paper_id is required", 400);
+  await assertPaperAccess(auth, paperId);
 
   const sourceFile = await getLatestSourceFile(paperId);
   const blob = await downloadStorageByRecord(sourceFile);
@@ -574,7 +606,8 @@ async function handleUserStats(req, res, auth) {
   ok(res, { task_count: taskCount, avg_score: avgScore, pass_rate: passRate });
 }
 
-async function handleUserTemplates(req, res) {
+async function handleUserTemplates(req, res, auth) {
+  requireLogin(auth);
   const { data, error } = await supabase
     .from("format_template")
     .select("id, template_name, version_no, is_default, status")
@@ -630,15 +663,19 @@ async function handleUserReport(req, res, auth) {
   });
 }
 
-async function handleFileDownload(req, res, fileId) {
+async function handleFileDownload(req, res, auth, fileId) {
+  const userId = requireLogin(auth);
   const { data, error } = await supabase
     .from("file_record")
-    .select("id, original_name, storage_path, mime_type")
+    .select("id, uploader_id, original_name, storage_path, mime_type")
     .eq("id", fileId)
     .eq("is_deleted", 0)
     .maybeSingle();
   if (error) throw new ApiError(error.message, 500);
   if (!data) throw new ApiError("File not found", 404);
+  if (String(auth.user?.role || "").toUpperCase() !== "ADMIN" && Number(data.uploader_id) !== userId) {
+    throw new ApiError("File not found", 404);
+  }
 
   const blob = await downloadStorageByRecord(data);
   const buffer = Buffer.from(await blob.arrayBuffer());
@@ -653,12 +690,15 @@ async function handleFileDelete(req, res, auth, fileId) {
   const userId = requireLogin(auth);
   const { data, error } = await supabase
     .from("file_record")
-    .select("id, storage_path")
+    .select("id, uploader_id, storage_path")
     .eq("id", fileId)
     .eq("is_deleted", 0)
     .maybeSingle();
   if (error) throw new ApiError(error.message, 500);
   if (!data) throw new ApiError("File not found", 404);
+  if (String(auth.user?.role || "").toUpperCase() !== "ADMIN" && Number(data.uploader_id) !== userId) {
+    throw new ApiError("File not found", 404);
+  }
 
   const objectPath = parseStoragePath(data.storage_path);
   if (objectPath) {
@@ -680,7 +720,18 @@ async function handleFileDelete(req, res, auth, fileId) {
   ok(res, result);
 }
 
-async function handleReportExcel(req, res, taskId) {
+async function handleReportExcel(req, res, auth, taskId) {
+  const userId = requireLogin(auth);
+  const { data: task, error: taskError } = await supabase
+    .from("detection_task")
+    .select("id, submitter_id")
+    .eq("id", taskId)
+    .maybeSingle();
+  if (taskError) throw new ApiError(taskError.message, 500);
+  if (!task) throw new ApiError("Task not found", 404);
+  if (String(auth.user?.role || "").toUpperCase() !== "ADMIN" && Number(task.submitter_id) !== userId) {
+    throw new ApiError("Task not found", 404);
+  }
   const { data, error } = await supabase
     .from("detection_result")
     .select("report_file_id, total_score, pass_flag, error_count, warning_count, info_count, detail_json")
@@ -689,7 +740,7 @@ async function handleReportExcel(req, res, taskId) {
   if (error) throw new ApiError(error.message, 500);
 
   if (data?.report_file_id) {
-    await handleFileDownload(req, res, data.report_file_id);
+    await handleFileDownload(req, res, auth, data.report_file_id);
     return;
   }
 
@@ -756,9 +807,11 @@ async function handleAdminUsers(req, res, auth) {
 
   if (req.method === "POST") {
     const payload = parseJsonBody(req);
+    const password = String(payload.password || "");
+    if (password.length < 8) throw new ApiError("Password must contain at least 8 characters", 400);
     const insertPayload = {
       username: payload.username,
-      password_hash: payload.password || "123456",
+      password_hash: await hashPassword(password),
       role: payload.role || "USER",
       real_name: payload.real_name || null,
       email: payload.email || null,
@@ -786,6 +839,10 @@ async function handleAdminUserById(req, res, auth, userId) {
       status: payload.status ?? 1,
       updated_at: new Date().toISOString()
     };
+    if (payload.password) {
+      if (String(payload.password).length < 8) throw new ApiError("Password must contain at least 8 characters", 400);
+      updatePayload.password_hash = await hashPassword(String(payload.password));
+    }
     const { error } = await supabase.from("sys_user").update(updatePayload).eq("id", userId);
     if (error) throw new ApiError(error.message, 500);
     ok(res, {});
@@ -1025,6 +1082,7 @@ export default async function handler(req, res) {
     let path = pathname.startsWith("/api/") ? pathname.slice(4) : pathname === "/api" ? "/" : pathname;
     if (path.length > 1 && path.endsWith("/")) path = path.slice(0, -1);
     const method = String(req.method || "GET").toUpperCase();
+    enforceSameOrigin(req);
     let auth = getAuth(req);
     auth = await hydrateAuth(auth);
 
@@ -1047,23 +1105,25 @@ export default async function handler(req, res) {
     if (method === "POST" && (path === "/auth/login" || path === "/session/login")) return handleAuthLogin(req, res);
     if (method === "POST" && (path === "/auth/register" || path === "/session/register")) return handleAuthRegister(req, res);
     if (method === "POST" && (path === "/auth/forgot-password" || path === "/session/forgot-password")) return handleAuthForgot(req, res);
+    if (method === "GET" && path === "/session/me") return handleSessionMe(res, auth);
+    if (method === "POST" && path === "/session/logout") return handleSessionLogout(req, res);
 
     if (method === "POST" && path === "/user/upload") return handleUserUpload(req, res, auth);
     if (method === "POST" && path === "/user/detect") return handleUserDetect(req, res, auth);
     if (method === "POST" && path === "/user/auto-format") return handleUserAutoFormat(req, res, auth);
     if (method === "GET" && path === "/user/history") return handleUserHistory(req, res, auth);
     if (method === "GET" && path === "/user/stats") return handleUserStats(req, res, auth);
-    if (method === "GET" && path === "/user/templates") return handleUserTemplates(req, res);
+    if (method === "GET" && path === "/user/templates") return handleUserTemplates(req, res, auth);
     if (method === "GET" && path === "/user/report") return handleUserReport(req, res, auth);
 
     const fileDownloadMatch = path.match(/^\/files\/(\d+)\/download$/);
-    if (method === "GET" && fileDownloadMatch) return handleFileDownload(req, res, Number(fileDownloadMatch[1]));
+    if (method === "GET" && fileDownloadMatch) return handleFileDownload(req, res, auth, Number(fileDownloadMatch[1]));
 
     const fileDeleteMatch = path.match(/^\/files\/(\d+)$/);
     if (method === "DELETE" && fileDeleteMatch) return handleFileDelete(req, res, auth, Number(fileDeleteMatch[1]));
 
     const reportExcelMatch = path.match(/^\/reports\/(\d+)\/excel$/);
-    if (method === "GET" && reportExcelMatch) return handleReportExcel(req, res, Number(reportExcelMatch[1]));
+    if (method === "GET" && reportExcelMatch) return handleReportExcel(req, res, auth, Number(reportExcelMatch[1]));
 
     if (path === "/admin/users") return handleAdminUsers(req, res, auth);
 

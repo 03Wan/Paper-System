@@ -1,16 +1,8 @@
 ﻿-- Supabase seed data
--- WARNING: password_hash stores plain text for demo compatibility.
+-- No default credentials are stored in source control.
 
-insert into public.sys_user (username, password_hash, role, real_name, email, phone, status)
-values
-  ('user01', 'user123456', 'USER', 'Demo User', 'user01@example.com', '13800000001', 1),
-  ('admin01', 'admin123456', 'ADMIN', 'System Admin', 'admin01@example.com', '13800000002', 1)
-on conflict (username) do update
-set role = excluded.role,
-    real_name = excluded.real_name,
-    email = excluded.email,
-    phone = excluded.phone,
-    status = 1;
+-- Production users are intentionally not seeded. Create the first administrator
+-- through a trusted server-side process so no shared default password exists.
 
 do $$
 declare

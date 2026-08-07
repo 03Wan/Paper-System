@@ -1,4 +1,4 @@
-import { apiPost } from "./request";
+import { apiGet, apiPost } from "./request";
 
 async function postWithFallback(primaryPath, fallbackPath, payload) {
   try {
@@ -15,10 +15,10 @@ export function loginApi(payload) {
   return postWithFallback("/session/login", "/auth/login", payload);
 }
 
-export function registerApi(payload) {
-  return postWithFallback("/session/register", "/auth/register", payload);
+export function getSessionApi() {
+  return apiGet("/session/me");
 }
 
-export function forgotPasswordApi(payload) {
-  return postWithFallback("/session/forgot-password", "/auth/forgot-password", payload);
+export function logoutApi() {
+  return apiPost("/session/logout");
 }

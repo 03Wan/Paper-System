@@ -37,9 +37,14 @@ const router = createRouter({
   ]
 });
 
-router.beforeEach((to, from, next) => {
+router.beforeEach(async (to, from, next) => {
   const store = useAuthStore();
+  await store.initialize();
   if (to.meta.public) {
+    if (store.isLogin && to.path === "/login") {
+      next(store.role === "ADMIN" ? "/admin/home" : "/user/home");
+      return;
+    }
     next();
     return;
   }

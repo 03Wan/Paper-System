@@ -1,7 +1,5 @@
 ﻿import { apiDelete, apiGet, apiGetBlob, apiPost } from "./request";
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
-
 function normalizeDetectResponse(data) {
   if (!data) return data;
   return {
@@ -51,11 +49,7 @@ export function getReportApi(taskId) {
 export async function autoFormatApi(paperId, payload = {}) {
   const resp = await apiPost("/user/auto-format", { paper_id: paperId, ...payload });
   if (resp?.data) {
-    const normalized = normalizeDetectResponse(resp.data);
-    if (normalized.download_url?.startsWith("/api") && API_BASE) {
-      normalized.download_url = `${API_BASE}${normalized.download_url}`;
-    }
-    resp.data = normalized;
+    resp.data = normalizeDetectResponse(resp.data);
   }
   return resp;
 }
